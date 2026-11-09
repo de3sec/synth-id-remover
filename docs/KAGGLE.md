@@ -20,16 +20,20 @@ The app reads these environment variables (set by the notebook):
 |---|---|
 | `SYNTH_DATA_DIR` | Where ComfyUI and the models are stored (default: repo directory) |
 | `COMFYUI_REF` | ComfyUI git tag to check out (default `v0.4.0`) |
+| `SYNTH_MAX_POLL` | Seconds to wait for ComfyUI to finish, incl. model loading (default `120`; the notebook sets `1800`) |
 | `SKIP_PERF_OPTS=1` | Skip building `flash-attn`/`sageattention` (very slow on Kaggle) |
 | `GRADIO_SHARE=1` | Launch Gradio with a public share link |
 
-## Why ComfyUI is pinned to v0.4.0
-- `ComfyUI-dype` is pinned to a Nov 2025 commit. ComfyUI from 2026-01-19 renamed `NextDiT.pe_embedder` to
-  `rope_embedder`, which breaks it (`'NextDiT' object has no attribute 'pe_embedder'`).
+## Why ComfyUI v0.4.0 + ComfyUI-dype v2.3.0
+- The workflow runs the `DyPE_FLUX` node on a Z-Image (`NextDiT`) model. `ComfyUI-dype` only supports Z-Image from
+  v2.2.0 (fixed in v2.3.0, commit `3b96d85`). Older versions (e.g. v2.1.0) look for `pe_embedder` and fail with
+  `'NextDiT' object has no attribute 'pe_embedder'` / `not a compatible FLUX/Qwen model structure`.
+  (`NextDiT` has always used `rope_embedder`; it was never renamed.)
+- dype v2.3.0 overrides `NextDiT.patchify_and_embed` with the signature used by ComfyUI v0.4.0; it is untested on
+  newer ComfyUI, so the two are pinned together.
 - `v0.3.77` is too old: it lacks the Z-Image Fun ControlNet loader (`UnboundLocalError: ... 'model'` in `load_model_patch`).
-- `v0.4.0` (2025-12-09) is the earliest tag with the loader that predates the rename. Tags up to `v0.10.0` should also work.
 
 ## Known issues
-- Kaggle T4/P100 GPUs have no native bf16; processing is slow and may exceed the 120 s limit in `app.py` (`max_poll`).
+- Kaggle T4/P100 GPUs have no native bf16; processing is slow and may exceed the default 120 s limit in `app.py` (set `SYNTH_MAX_POLL`).
 - If a workflow fails, ComfyUI's error is raised immediately instead of waiting for the timeout.
 - Switching ComfyUI versions with local patches needs `git checkout -f` (the notebook does this; models are untracked and kept).

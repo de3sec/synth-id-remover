@@ -24,9 +24,13 @@ os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 # Configuration
 REPO_URL = "https://github.com/00quebec/Synthid-Bypass"
 COMFYUI_URL = "https://github.com/comfyanonymous/ComfyUI"
-# ComfyUI must match the pinned ComfyUI-dype commit below: newer ComfyUI (>=2026-01-19) renamed
-# NextDiT.pe_embedder -> rope_embedder, which breaks dype. v0.4.0 (2025-12-09) is the earliest tag with the Z-Image Fun ControlNet loader (v0.3.77 lacks it).
+# ComfyUI and ComfyUI-dype are pinned as a pair. v0.4.0 (2025-12-09) has the Z-Image Fun ControlNet loader
+# (v0.3.77 lacks it) and the NextDiT.patchify_and_embed signature that dype v2.3.0 overrides.
 COMFYUI_REF = os.environ.get("COMFYUI_REF", "v0.4.0")
+# ComfyUI-dype v2.3.0 (2025-12-09): first release that supports Z-Image/NextDiT (v2.2.0+, fixed in v2.3.0).
+# v2.1.0 (db90fe5) predates Z-Image support and fails with "not a compatible FLUX/Qwen model structure".
+# v2.3.0 has the same DyPE_FLUX node inputs as v2.1.0 plus a "zimage" model_type option, so the workflow is unchanged.
+DYPE_COMMIT = "3b96d8572f619efdb9bfc0667843b63f4e23b06e"
 PYTHON_EXTENSION_URL = "https://github.com/pydn/ComfyUI-to-Python-Extension"
 
 ROOT_DIR = os.getcwd()
@@ -103,6 +107,20 @@ def _patch_qwen_for_mig_gpu():
                     f.writelines(lines)
                 print("[OK] Patched ops.py linear operations")
 
+def _pin_dype():
+    """Make sure ComfyUI-dype is at DYPE_COMMIT, also for a clone left over from an earlier run."""
+    node_dest = os.path.join(COMFYUI_DIR, "custom_nodes", "ComfyUI-dype")
+    if not os.path.isdir(os.path.join(node_dest, ".git")):
+        return
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=node_dest, capture_output=True, text=True).stdout.strip()
+    if head == DYPE_COMMIT:
+        return
+    print(f"Pinning ComfyUI-dype to {DYPE_COMMIT[:7]} (was {head[:7] or 'unknown'})")
+    # Full clone, so the commit is already present locally; fetch only if it is missing.
+    if subprocess.run(["git", "cat-file", "-e", DYPE_COMMIT], cwd=node_dest, capture_output=True).returncode != 0:
+        subprocess.run(["git", "fetch", "-q", "--tags", "origin"], cwd=node_dest, check=True, capture_output=True)
+    subprocess.run(["git", "checkout", "-q", "-f", DYPE_COMMIT], cwd=node_dest, check=True, capture_output=True)
+
 def setup():
     """Environment setup for Hugging Face Space"""
     # Check if a known model file exists to skip setup
@@ -110,6 +128,7 @@ def setup():
 
     if already_initialized:
         print("=== ENVIRONMENT ALREADY INITIALIZED ===")
+        _pin_dype()
         # Still apply critical patches even if already initialized
         _patch_qwen_for_mig_gpu()
         return
@@ -151,8 +170,7 @@ def setup():
             elif name == "ComfyUI-Impact-Subpack":
                 subprocess.run(["git", "checkout", IMPACT_SUBPACK_VERSION], cwd=node_dest, check=True, capture_output=True)
             elif name == "ComfyUI-dype":
-                # changed to v2.1.0 (Nov 29, 2025) before the update introduces new parameters
-                subprocess.run(["git", "checkout", "db90fe5012f94c6aef406d743292daf76b4477a6"], cwd=node_dest, check=True, capture_output=True)
+                subprocess.run(["git", "checkout", DYPE_COMMIT], cwd=node_dest, check=True, capture_output=True)
     print("[OK] Custom nodes installed")
 
     # Apply MIG GPU compatibility patches
@@ -350,7 +368,8 @@ def remove_watermark(input_image):
 
         # 4. Wait for completion
         # We poll the history endpoint until the prompt_id appears
-        max_poll = 120 # 120 seconds for processing
+        # Seconds to wait (includes model loading). Slow GPUs (e.g. Kaggle T4) need far more than 120.
+        max_poll = int(os.environ.get("SYNTH_MAX_POLL", "120"))
         finished = False
         output_filename = None
         
